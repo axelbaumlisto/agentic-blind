@@ -4,6 +4,16 @@ Agentic skills for [pi](https://github.com/badlogic/pi-mono) implementing a
 plan → blind-harden → gated-execute pipeline with adversarial agent
 boundaries.
 
+**Blind critics solve the bias problem.** When reviewer agents see prior
+reviews — or even subtle resolution markers left in the artifact ("resolved",
+"verified", "aligned with step 1") — they anchor on past conclusions,
+confirm each other, and steer away from "already decided" zones, producing
+false convergence. Each blind round here runs fresh-context critics on a
+sanitized copy with all provenance stripped: no groupthink, no anchoring,
+no self-confirmation. Blind rounds find distinct issues each pass and can
+even revert wrong recommendations from earlier rounds — anchored reviews
+mostly just agree with themselves.
+
 ```
 /plan  →  /aplan (blind plan review)  →  /ado (gated execution)  →  areview (code audit)
 ```
