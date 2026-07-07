@@ -1,0 +1,20 @@
+# Leak-verify vocabulary: resolution/provenance stems that anchor blind critics.
+# One regex per line, case-insensitive. ADD your domain's resolution words
+# via --extra-words; handle false-positive stems via --allow
+# (e.g. 'согласованность', 'unresolved', 'resolver', 'left-aligned').
+review
+revision
+ревью
+ревиз
+слеп(?:ой|ая|ых)
+верифицир
+verified
+подтвержден
+confirmed
+resolved
+разрешен(?:о|ы)\b
+согласовано\b
+aligned with
+consistent with (?:step|task|round)
+settled
+areview
