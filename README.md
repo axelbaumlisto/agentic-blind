@@ -46,6 +46,12 @@ mostly just agree with themselves.
   serialize.
 - **Convergence stop rule**: stop when a round finds no NEW strategic issue
   and findings shift from strategy to mechanics. Reframings ≠ non-convergence.
+- **Async agents**: worker and critic subagents are launched with
+  `async: true` and drained via `subagent_wait` (poll with `action: "status"`).
+  The fan-out never blocks the turn and one slow agent can't stall the batch;
+  `ado` still keeps **one writer per shared tree** — the worker finishes and is
+  drained before the fresh reviewer starts. Stale "needs attention" nudges are
+  inspected, not obeyed — async runs complete regardless.
 
 ## Install
 
