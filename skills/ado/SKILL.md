@@ -14,6 +14,14 @@ description: |
 You are an **orchestrator**: parse the plan, launch worker→reviewer loops
 per step, commit checkpoints, track progress. **You never write code.**
 
+**Async execution**: launch every worker and reviewer as an async subagent
+(`async: true`) and drain it with `subagent_wait({ id })` before acting on its
+result. This keeps the orchestrator responsive and lets the harness surface
+long-running/attention signals — while preserving strict per-step ordering:
+the worker is the **sole writer** for the shared tree, so it MUST finish and be
+drained before its (read-only) reviewer starts. Parallel batches use async
+fan-out (see Parallel batches).
+
 ```
 parse plan → DAG → step loop (parallel where safe):
   worker → reviewer (fresh) → APPROVE: verify → commit checkpoint
@@ -79,9 +87,10 @@ mid-run → stop and ask, never reset over them.
 ### Worker
 
 ```
-subagent({ agent: "delegate", model: WORKER_MODEL,
+const w = subagent({ async: true, agent: "delegate", model: WORKER_MODEL,
   task: <step task>,
   acceptance: { criteria: [<step acceptance>], verify: [{command: <cmd>}] } })
+subagent_wait({ id: w.id })   // sole writer: drain before scope-guard + reviewer
 ```
 
 Worker task: step id/title, plan context, step description, files,
@@ -109,8 +118,10 @@ found and claimed fixed — facts, not verdicts; small anchoring trade for
 determinism, else round-2 reviewer misses an ignored fix).
 
 ```
-subagent({ agent: "delegate", model: REVIEWER_MODEL, context: "fresh",
-  task: <review task>, output: "<RUN_DIR>/review_{step_id}_r{round}.md" })
+const r = subagent({ async: true, agent: "delegate", model: REVIEWER_MODEL,
+  context: "fresh", task: <review task>,
+  output: "<RUN_DIR>/review_{step_id}_r{round}.md" })
+subagent_wait({ id: r.id })
 ```
 
 Review task: plan, step description, acceptance criteria; check the diff
@@ -138,8 +149,9 @@ in the step succeeding.
   approved code). Verify fails → treat as REJECT-FIX.
 - **REJECT-FIX** → `subagent({action: "resume", id: <worker run>,
   message: <feedback>})`. Resume contract: a completed run revives as an
-  **async** child → `wait()` after resume. Resume is best-effort (needs a
-  persisted session) — if it fails, respawn fresh with feedback.
+  **async** child → `subagent_wait({ id })` after resume. Resume is
+  best-effort (needs a persisted session) — if it fails, respawn fresh
+  (async) with feedback and wait.
 - **REJECT-REDO** → **first revert the tree** to last approved commit
   (see Revert below — code anchors harder than reasoning; a fresh worker
   seeing the old wrong code will patch it, not restart), then respawn a
@@ -162,7 +174,8 @@ safe only because pre-flight enforced a clean baseline).
 Isolation lives in the PLAN (disjoint `Files:` + scope-guard), not in git
 machinery — one shared tree.
 
-- Batch = same DAG level, ≤2-3 steps at once, via subagent PARALLEL mode.
+- Batch = same DAG level, ≤2-3 steps at once, via subagent async PARALLEL
+  mode (`async: true` + `tasks:[...]`), drained with `subagent_wait({ all: true })`.
 - Enable only if ALL hold: disjoint Files (respecting Depends); step verify
   commands don't conflict (shared build/tests → run after the batch's
   commits, not inside); user didn't pass `--sequential`. Doubt ⇒ serialize.
@@ -213,12 +226,14 @@ parallel batch count.
 ## Key principles
 
 1. Orchestrator never writes code.
-2. **Adversarial boundary**: the checker is never in the checked party's
+2. **Async agents**: worker and reviewer run `async: true`, drained via
+   `subagent_wait`; one writer per shared tree (worker drained before reviewer).
+3. **Adversarial boundary**: the checker is never in the checked party's
    context (fresh reviewer every round); the implementer keeps context
    (resume on FIX).
-3. Reviewer classifies FIX vs REDO; on REDO the tree is reverted before the
+4. Reviewer classifies FIX vs REDO; on REDO the tree is reverted before the
    fresh worker starts.
-4. Verify before commit; every approved step is a git checkpoint.
-5. Parallel only on plan-level isolation (disjoint Files), doubt = serialize.
-6. Cross-skill: harden plans with `/aplan` before executing; audit the final
+5. Verify before commit; every approved step is a git checkpoint.
+6. Parallel only on plan-level isolation (disjoint Files), doubt = serialize.
+7. Cross-skill: harden plans with `/aplan` before executing; audit the final
    diff with the areview skill (Phase 5).

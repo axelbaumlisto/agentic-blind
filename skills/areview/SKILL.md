@@ -142,8 +142,15 @@ Notes:
 
 ## Invocation pattern
 
+Launch critic rounds **asynchronously** (`async: true`) so the fan-out never
+blocks the turn and one slow critic can't stall the round; drain with
+`subagent_wait({ all: true })` (or poll `subagent({ action: "status", id })`)
+only when this turn must synthesize. A failed critic (e.g. bad task JSON) is
+re-launched async on its own — it never blocks the others.
+
 ```
 subagent({
+  async: true,
   context: "fresh",
   concurrency: 3,
   tasks: [
@@ -162,9 +169,14 @@ subagent({
 })
 ```
 
-Editor round — chain, not parallel:
+Then drain before synthesizing:
 ```
-subagent({ context: "fresh", chain: [
+subagent_wait({ all: true })   // or: subagent({ action: "status", id: <runId> })
+```
+
+Editor round — chain, not parallel (also async; wait before the verify round):
+```
+subagent({ async: true, context: "fresh", chain: [
   { agent: "delegate", task: "Critic: findings on {file} → {chain_dir}/findings.md" },
   { agent: "delegate", task: "Editor: apply fixes from {chain_dir}/findings.md to {file}, explain each" }
 ]})
@@ -181,8 +193,11 @@ subagent({ context: "fresh", chain: [
 - Blind gate: see Code-mode carve-out above for prose vs code rules.
 - Cost: each round = 2-4 fresh agents + web search. 1-2 rounds suffice for
   most artifacts; reserve 3-5 blind rounds for high-stakes. Don't auto-loop.
-- Ignore stale "needs attention" subagent signals — parallel runs complete
-  despite nudges.
+- **Async by default**: launch rounds with `async: true` and drain with
+  `subagent_wait`; only wait when the current turn must produce the synthesis,
+  otherwise let the run continue in the background and synthesize when woken.
+- Ignore stale "needs attention" subagent signals — parallel/async runs
+  complete despite nudges; inspect with `action: "status"` before steering.
 
 ## Output convention
 
