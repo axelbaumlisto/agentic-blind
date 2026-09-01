@@ -30,6 +30,25 @@ parse plan → DAG → step loop (parallel where safe):
 → [optional] final areview over full diff → fix loop (≤1 re-review) → done
 ```
 
+
+## Autonomy contract (READ THIS — do not violate)
+
+**Run the ENTIRE plan start→end without pausing to ask permission between steps.**
+
+- After a step is APPROVED, **immediately** start the next step. Do NOT stop and ask
+  "should I continue?" — the user already said go by invoking `/ado`.
+- You only stop early for: (a) a step that fails after MAX_ROUNDS, (b) a hard blocker
+  (missing dependency, ambiguous spec the plan doesn't resolve), or (c) a step the plan
+  itself marks as a **human-gated / production-safety** step (e.g. live ops on a prod host).
+- For a human-gated step: do the work yourself **carefully and interactively** (still don't
+  hand destructive prod ops to an autonomous worker), then resume the loop. Gating ≠ abandoning.
+- "Worker implements, reviewer reviews, you orchestrate" applies to EVERY step, all the way
+  to the Completion Report. Do not silently drop the reviewer to save turns.
+- Between steps: run the verify command, then proceed. A green verify is your signal to advance,
+  not a checkpoint to ask the user about.
+
+If you catch yourself about to write "Continue?" or "Shall I proceed to Phase N?" — don't. Proceed.
+
 ## Quick start
 
 ```

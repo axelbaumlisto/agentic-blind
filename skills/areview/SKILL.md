@@ -1,205 +1,277 @@
 ---
 name: areview
-description: "Multi-role agentic review & revise orchestrator. Takes a TASK and/or a FILE (plan, doc, code, diff), spins up parallel fresh-context subagents in expert roles (critic, researcher, editor; code: integration/conformance/edge-case). Agents verify claims (web search) and either write findings (critic mode) or apply changes (editor mode). Runs BLIND by default (sanitized artifact, no prior reviews) with a convergence stop rule. Triggers: /areview, areview, blind review, multi-role review, critique and revise, agentic review, code review."
+description: "Multi-role agentic review & revise orchestrator. Takes a TASK and/or a FILE, spins up parallel fresh-context subagents in different expert roles (critic, researcher, editor). Agents search the web, verify claims, and either write findings (critic mode) or apply changes (editor mode). Runs BLIND by default (sanitized artifact, no access to prior reviews) for objectivity against groupthink, with a convergence stop rule. Triggers: /areview, areview, blind review, multi-role review, critique and revise, agentic review."
 ---
 
 # AREVIEW — agentic multi-role review & revise
 
-Review **and optionally revise** any artifact (plan, doc, code, diff) via
-parallel fresh-context subagents in distinct expert roles. Blind by default:
-fresh context + sanitized artifact + no access to prior reviews — anchored
-reviews mostly confirm each other; blind rounds find distinct issues and can
-revert earlier wrong recommendations. Drop blind only to deliberately build
-on a known review (rare).
+## Purpose
 
-**Skill dir** = directory containing this SKILL.md (default install:
-`~/.pi/agent/skills/areview/`). `sanitize.py`, `leak_words.txt`,
-`test_fixture.md` live there.
+Review **and optionally revise** any artifact (plan, doc, code, config) using
+parallel fresh-context subagents acting in distinct expert **roles**. Unlike
+`aplan` (read-only plan review), `areview`:
+
+- Accepts **a task, a file, or both**
+- Assigns agents **different roles** (critic / researcher / editor)
+- Agents **search the internet** to verify claims against current best practice
+- Agents can **write changes** (editor role) or **only critique** (critic role)
+- **Runs BLIND by default** (fresh context + sanitized artifact, no access to
+  prior reviews) for objectivity against groupthink, with an explicit
+  **convergence stop rule**
+
+> **Blind is the default for objectivity.** Only drop blind mode when you
+> deliberately want agents to build on a known prior review (rare). Blind
+> rounds produce distinct findings each pass and even *revert* wrong
+> recommendations from earlier rounds; anchored rounds mostly confirm each
+> other.
+
+## When to use
+
+- Stress-testing a plan/spec/doc before execution
+- Fact-checking claims against live sources (web search)
+- Iterative hardening: critique → revise → re-critique until convergence
+- Any task where one orchestrator should stay in control while specialist
+  agents contribute findings or edits
 
 ## Inputs
 
 | Input | Required | Notes |
 |-------|----------|-------|
-| `file` | optional | Artifact path (plan/doc/code/diff). Absolute paths to agents. |
-| `task` | optional | What to review/achieve. ≥1 of file/task required. |
-| `roles` | optional | Default: critic ×3. |
-| `mode` | optional | `critic` (findings only, default) or `editor` (apply changes). |
-| `blind` | optional | Default ON. |
+| `file` | optional | Path to artifact under review (plan/doc/code). Pass absolute path to each agent. |
+| `task` | optional | What to review/achieve. At least one of file/task required. |
+| `roles` | optional | Which roles to spawn (default: critic ×3). |
+| `mode` | optional | `critic` (write findings only) or `editor` (apply changes). Default critic. |
+| `blind` | optional | **Default ON.** Sanitize artifact + forbid reading prior reviews. Disable only to deliberately anchor on a known review. |
 | `rounds` | optional | Max blind rounds (default 3, hard max ~5). |
 
-## Roles
+## Roles (mix & match)
 
-Prose artifacts:
-- **critic** — substantive errors, weak assumptions, logic/math holes.
-  Findings report only, NO edits. Cite sources (URLs), verdict
-  GO/NO-GO/CONDITIONAL + maturity /10.
-- **researcher** — web-verify factual claims (APIs, deadlines, benchmarks).
-- **editor** — applies changes (only `mode: editor`), explains each edit.
-  Runs AFTER critics in a chain; never two editors on one file in parallel.
-
-Code artifacts (diff + plan + acceptance as input):
-- **integration critic** — seams between changes, duplication, dead code,
-  API consistency across the diff.
-- **conformance critic** — does the whole delivered change match what the
-  plan/spec promised.
-- **edge-case/security critic** — races, boundaries, injections, error paths.
-
-Domain specialists (safety, ops, migration, UX...) — define ad-hoc.
-Model diversity: give critics different models (`model:` per task) when
-available — fresh context removes context bias, not model blind spots.
+- **critic** — find errors, weak assumptions, logical/math holes. Write a
+  findings report. NO edits. Must cite sources (URLs) and give GO/NO-GO + a
+  maturity score (1-10).
+- **researcher** — search the web to verify/refute the artifact's factual
+  claims (APIs, deadlines, best practices, benchmarks). Report with URLs.
+- **editor** — apply concrete changes to the file (only in `mode: editor`).
+  Must explain each edit. Runs AFTER critics in a chain, never in parallel
+  with other editors on the same file.
+- **domain specialists** (optional) — measurement/bidding, safety, ops,
+  migration, UX, security, etc. Define ad-hoc per task.
 
 ## Workflow
 
-**A. Critic round (default):** parent sanitizes artifact → launches 2-4
-critics/researchers in parallel, fresh context → each reads ONLY the
-artifact + named data files, uses its own web-search tools as it sees fit,
-writes findings to its `output` path → parent synthesizes and applies
-minimal literal fixes to the annotated original.
+### A. Critic round (default, parallel)
+1. Parent prepares inputs (file path + context).
+2. Parent launches 2-4 critics/researchers in **parallel, fresh context**.
+3. Each agent reads ONLY the artifact + named data files, **uses its own web
+   search / tools as it sees fit** (they are experts — don't prescribe a
+   specific search command), writes a findings report to its `output` path.
+4. Parent synthesizes findings and applies fixes itself (or via editor round).
 
-**B. Editor round (`mode: editor`, chained):** parent passes synthesized
-findings to one editor; editor edits **the annotated ORIGINAL**, never the
-sanitized `/tmp/*-clean.md` copy (edits would be lost or wipe provenance the
-sanitizer stripped). Blind applies to *reading for critique*, not *writing
-fixes*. Re-run a critic round to verify.
+### B. Editor round (mode: editor, chained)
+1. Parent passes synthesized findings to a single **editor** agent.
+2. Editor applies edits to **the annotated ORIGINAL file**, explains each change.
+3. Re-run a critic round to verify (loop).
 
-**C. Blind iterative hardening (high-stakes artifacts):** repeat per-round,
-strict order:
-1. **(Re)sanitize the CURRENT artifact** → clean copy, leak-verify to 0.
-   Re-sanitize every round — the parent's last edits added fresh provenance.
+> 🔴 **Editor ↔ blind reconcile (critical):** the sanitized copy is for
+> **critics/researchers only**. The **editor always edits the real annotated
+> original**, never the `/tmp/*-clean.md` copy — otherwise edits land in /tmp
+> (lost) or, if copied back, wipe the provenance/changelog the sanitizer
+> stripped. Blind applies to *reading for critique*, not to *writing fixes*.
+
+### C. Blind iterative hardening (recommended for high-stakes artifacts)
+Repeat critic rounds until **convergence**. Each round is **fresh context** so
+agents never see prior reviews — this prevents groupthink and lets later rounds
+*correct* earlier mistakes.
+
+Per-round loop (strict order):
+1. **(Re)sanitize** the CURRENT artifact → clean copy; run leak-verify until 0.
+   (Re-sanitize every round: the parent's last edits added fresh provenance.)
 2. Launch fresh blind critics on the clean copy.
-3. Synthesize; apply **minimal literal** fixes to the annotated original —
-   don't add reasoning the critic didn't give (unreviewed reasoning is where
-   new bugs enter).
-4. Check stop rule; if not converged, go to 1.
+3. Synthesize; apply **minimal literal** fixes to the annotated original.
+4. Check the stop rule. If not converged, go to 1.
 
-## 🔒 Blind discipline
-
-Fresh context alone is not blind: **the artifact itself leaks prior
-reviews**, and subtle resolution vocabulary ("resolved", "VERIFIED",
-"aligned with step 1", "(intentional buffer)") silently tells fresh agents
-"this zone is decided, don't dig" — producing false convergence even when
-obvious "review #N" markers are stripped. Strip all 4 classes:
-
-1. Explicit review trail: `review #N`, `REVISION N`, `round N`, blind/anchored
-2. Resolution markers: resolved, verified, confirmed, agreed, aligned/consistent with step N
-3. Intent justifications defending a past choice: `(intentional ...)`, `corrected to`
-   — but on a **first-round** artifact these are legitimate author rationale;
-   strip class 3 from round 2 onward.
-4. Changelog/provenance headers, `Sources: *_review_*.md` lines
-
-Replace with the plain claim (keep the fact, drop the defense):
-"ALIGNED with step 1: ≥14 days" → "≥14 days".
-
-```bash
-python3 <skill_dir>/sanitize.py plan.md /tmp/plan-clean.md \
-  [--extra-words domain.txt] [--allow allow.txt] [--report-only]
-```
-
-leak_words.txt loads by default; `--extra-words` adds domain vocabulary;
-`--allow` holds false-positive regexes (stems: «согласованность»,
-"unresolved", "left-aligned"). On LEAKS>0 no out file is written + exit 1 —
-**normal on first run**; iterate patterns/allowlist to 0, don't weaken the
-vocabulary. Provenance can also live in cited source files — pass sanitized
-sources too, or flag their stale conclusions as historical.
-
-### Code-mode carve-out (blind gate)
-
-- **Prose artifacts:** no clean copy with leak-verify 0 = not blind. Hard gate.
-- **Code mode (diff input):** run leak-verify (grep against leak_words.txt)
-  on the diff AND on the plan copy — code comments, test names, CHANGELOG in
-  a diff do carry provenance. Fires → sanitize before handing to critics;
-  clean → pass as is. Blind here = fresh context + leak-checked inputs +
-  forbidden reads: git log, review files, ROUNDS.md (always provenance).
-  This ban is prompt discipline, not construction — critics have bash;
-  treat as residual risk.
-
-## 🛑 Convergence stop rule
-
-Stop blind rounds when BOTH hold:
-- **(a)** round surfaced no NEW strategic finding (binary check — more robust
-  than comparing maturity scores; independent critics differ by ±1), AND
-- **(b)** findings shifted from strategy ("what's wrong") to mechanics
-  (typos, checklist sync).
-
-Notes:
-- Parent edits can inject new bugs; round N+1 flagging round N's edit is the
-  safety net working, not non-convergence. Convergence = nothing new in the
-  **current** text.
-- A late round may surface **reframings** ("is the whole approach right?")
-  rather than bugs — that's frame exhaustion, not non-convergence: file them
-  as deferred P2 items, stop reviewing, start executing.
-- Log each round to `research/<area>/ROUNDS.md` (fallback
-  `/tmp/<TAG>_ROUNDS.md`): one line —
-  `round N: strategic|mechanical, verdicts, what changed`. Stop rule is
-  checked against this file, not parent memory. Critics must not read it.
+> The single biggest failure mode is skipping step 1's re-sanitize after edits,
+> or stripping only obvious `review/revision` words. Both yield false
+> convergence. Always run leak-verify to 0 on the resolution-vocabulary regex.
 
 ## Naming & paths
 
-- `output` = absolute path per agent.
-- Findings: `<repo>/research/<area>/<TAG>_review_<N>.md` if `research/`
-  exists, else `/tmp/<TAG>_review_<N>.md`. TAG = round label
-  (BLIND/CLEAN/ROUND2...), N = agent index. Create dirs first.
+- `output` = **absolute path** per agent (Constraints require absolute paths).
+- Convention: `<repo>/research/<area>/<TAG>_review_<N>.md` if the project has a
+  `research/` dir; otherwise `/tmp/<TAG>_review_<N>.md`. Create the dir first.
+- `TAG` = round label (BLIND / CLEAN / ROUND2 ...). `N` = agent index in round.
+- Parent picks concrete values; nothing in the file is a literal placeholder.
 
-## Invocation pattern
+## 🔒 BLIND DISCIPLINE (critical — learned the hard way)
 
-Launch critic rounds **asynchronously** (`async: true`) so the fan-out never
-blocks the turn and one slow critic can't stall the round; drain with
-`subagent_wait({ all: true })` (or poll `subagent({ action: "status", id })`)
-only when this turn must synthesize. A failed critic (e.g. bad task JSON) is
-re-launched async on its own — it never blocks the others.
+Fresh context alone is NOT enough. **The artifact itself leaks prior reviews.**
+If the file contains annotations like "fixed by review #4", "REVISION 3",
+agents see them and steer away from those areas — defeating the blind purpose.
+
+### ⚠️ The subtle trap (learned the hard way — cost ~3 extra rounds)
+
+The obvious leaks ("review #N", "blind run", "REVISION") are easy to strip. But
+**provenance hides in words that never mention review at all.** A line like:
+- "dispute resolved by direct API query"
+- "ALIGNED with step 1" / "consistent with Task 11"
+- "VERIFIED" / "confirmed" / "agreed" / "settled"
+- "(intentional buffer)" / "deliberately deferred"
+
+...silently tells a fresh agent **"this zone is already decided, don't dig"** —
+producing **false convergence**. In one campaign, an artifact looked "converged"
+across 5 rounds; a run on a copy stripped only of `review/revision/round`
+**still** missed a logical error, because internal "resolved/aligned/verified"
+markers kept agents anchored. The error surfaced only after stripping THOSE too.
+
+**Rule:** strip ALL of these classes before a blind round:
+1. Explicit review trail: `review #N`, `REVISION N`, `round N`, `blind/anchored`
+2. Resolution markers: `resolved`, `verified`, `confirmed`, `agreed`,
+   `dispute settled`, `aligned/consistent with step/task N`
+3. Intent justifications that defend a past choice: `(intentional ...)`,
+   `(deliberate buffer)`, `corrected to`, `NOT X — actually Y`
+4. Changelog/provenance headers and "Sources: *_review_*.md" lines
+
+Replace with the **plain claim** (keep the fact, drop the defense). E.g.
+"ALIGNED with step 1: ≥14 days" → "≥14 days". "VERIFIED via API: both
+budget-bound" → "both budget-bound".
+
+Pass the sanitized copy to critics. Keep the annotated original for the editor.
+
+```bash
+# sanitizer template — ADAPT patterns + ADD your domain's resolution words
+python3 - << 'PY'
+import re
+src = 'plan.md'; out = '/tmp/plan-clean.md'
+s = open(src).read()
+pats = [
+  r'\s*\((?:fixed|found|caught) by[^)]*\)',
+  r'\bREVISION \d+\b', r'\bround #?\d+\b', r'\(review #?\d+\)',
+  r'\b(?:слепой|блайнд|anchored)\b[^.\n]*',
+  # resolution / provenance markers (the subtle trap):
+  r'\s*—?\s*(?:СОГЛАСОВАНО|aligned|consistent) (?:со?|with) [^.\n]*',
+  r'\b(?:ВЕРИФИЦИРОВАНО?|VERIFIED|confirmed|разрешён|resolved|Спор ревью[^.\n]*)\b',
+  r'\(исправлено[^)]*\)', r'\(нашли[^)]*\)', r'\(areview[^)]*\)',
+]
+for p in pats:
+    s = re.sub(p, '', s, flags=re.I)
+open(out,'w').write(s)
+# leak-verify: ANY residue of review/resolution vocabulary = NOT clean
+leak_re = r'review|revision|ревь|ревиз|слеп|согласован|верифиц|verified|resolved|aligned|areview'
+leaks = [l for l in s.splitlines() if re.search(leak_re, l, re.I)]
+print('LEAKS:', len(leaks))
+for l in leaks: print('  >', l)
+assert not leaks, 'NOT clean — add patterns until LEAKS:0 before running blind'
+PY
+```
+
+> **Provenance can also live OUTSIDE the artifact.** If the plan cites a source
+> file (e.g. `GADS_STATS.md`) that itself carries stale "recommends Task 2-3"
+> conclusions from a since-reverted strategy, agents may "restore" the reverted
+> decision. Either pass a sanitized source too, or flag stale source-conclusions
+> as historical.
+
+## 🛑 CONVERGENCE STOP RULE
+
+Stop blind rounds when BOTH hold:
+- **(a)** the round surfaced **no NEW strategic finding** (binary check — more
+  robust than comparing 1-10 scores, which different fresh agents calibrate
+  differently), AND
+- **(b)** findings shifted from "what's wrong / suboptimal" (strategy) to
+  "typos / checklist-out-of-sync" (mechanics).
+
+Maturity scores are a secondary signal only (treat ±1 as noise — independent
+fresh critics disagree by that much). ~5 rounds is a reasonable hard maximum.
+Once a round produces only mechanical sync fixes, returns are exhausted — stop
+and execute.
+
+### ⚠️ Parent edits can INJECT new bugs — each round may correct the last
+
+Observed repeatedly: the parent applies a round's fix, and the **next** blind
+round flags that the parent **mis-stated the fix** (e.g. justified removing a
+conversion by "its value distorts tCPA" — wrong, since tCPA bids on count, not
+value). This is the method working as intended: blind rounds correct the
+parent's own freshly-introduced errors. Implication:
+- **After applying fixes, the artifact changed → re-sanitize before next round.**
+- Don't treat "round N+1 found something in what round N edited" as failure to
+  converge — it's the safety net catching your edit. Real convergence = a round
+  finds nothing new in the **current** text, not that rounds stopped disagreeing.
+- Keep parent edits **minimal and literal** to the finding; don't add reasoning
+  the critic didn't give (that reasoning is unreviewed and often where new bugs
+  enter).
+
+### ⚠️ Distinguish "converged" from "frame exhausted"
+
+A late round may report "no strategic errors" yet still surface **new strategic
+findings that are reframings, not bugs** (e.g. "is the whole campaign even
+incremental?" vs the plan's frame "optimize this campaign's bids"). These are
+NOT stop-rule violations — they signal the plan has converged **within its
+frame**, and remaining questions need an **experiment/execution** (geo-holdout,
+A/B), not more text review. When findings become "change the frame" rather than
+"fix the text", **stop reviewing and start executing** — file the reframings as
+explicit deferred (P2) items so they aren't lost.
+
+**Why blind helps (evidence, not law):** in one observed 5-run campaign-plan
+hardening, anchored reviews mostly confirmed each other while blind rounds
+produced distinct findings each pass and even *reverted* a wrong recommendation
+from a prior round. Caveat (n=1, one domain): blind costs repeated work and can
+oscillate (round N+1 undoes round N) — the parent holding the annotated original
+and synthesizing across rounds is what prevents the pendulum. Use blind as the
+default for **high-stakes** artifacts, not a universal law.
+
+## Invocation pattern (subagent tool)
 
 ```
 subagent({
-  async: true,
   context: "fresh",
   concurrency: 3,
   tasks: [
     { agent: "delegate", output: "/abs/research/area/BLIND_review_1.md",
-      task: "Role: senior <domain> critic. FIRST time seeing this. Find
-             SUBSTANTIVE errors — if it's good, say so, don't invent problems.
-             DATA (only these): <sanitized file>, <data file>. Do NOT read
-             other review files. Use web search tools available to you to
-             verify claims. WRITE audit (md): 1.Errors+URLs 2.Missing
-             3.Doubtful assumptions 4.VERDICT GO/NO-GO/CONDITIONAL + maturity /10." },
-    { agent: "delegate", output: ".../BLIND_review_2.md", model: "<other model>",
+      task: "Role: senior <domain> critic. FIRST time seeing this. Goal: find
+             SUBSTANTIVE errors. Be honest — if good, say so, don't invent
+             problems. DATA (only these): <sanitized file>, <data file>. Do NOT
+             read other review files. SEARCH WEB (cd skills/exa-search &&
+             bash search.sh \"q\" 5 / bash content.sh \"url\" 3000) to verify
+             claims. WRITE audit (md): 1.Errors+URLs 2.Missing 3.Doubtful
+             assumptions 4.VERDICT GO/NO-GO/CONDITIONAL + maturity /10." },
+    { agent: "delegate", output: "research/.../TAG_review_2.md",
       task: "Role: <second angle>. ... (different lens, same discipline)" },
-    { agent: "delegate", output: ".../BLIND_review_3.md",
-      task: "Role: math/logic checker. Verify ALL arithmetic + logic. ..." }
+    { agent: "delegate", output: "research/.../TAG_review_3.md",
+      task: "Role: measurement/math checker. Verify ALL arithmetic + logic. ..." }
   ]
 })
 ```
 
-Then drain before synthesizing:
+For an **editor** round, use a chain instead of parallel:
 ```
-subagent_wait({ all: true })   // or: subagent({ action: "status", id: <runId> })
-```
-
-Editor round — chain, not parallel (also async; wait before the verify round):
-```
-subagent({ async: true, context: "fresh", chain: [
-  { agent: "delegate", task: "Critic: findings on {file} → {chain_dir}/findings.md" },
+subagent({ context: "fresh", chain: [
+  { agent: "delegate", task: "Critic: produce findings on {file} → {chain_dir}/findings.md" },
   { agent: "delegate", task: "Editor: apply fixes from {chain_dir}/findings.md to {file}, explain each" }
 ]})
 ```
 
 ## Constraints
 
-- Critics/researchers must **not modify project/source files** — they only
-  write their own `output` report (phrase it that way, not "no file writes").
-- Only editor writes, only in `mode: editor`, never two editors in parallel
-  on one file.
-- Always absolute paths. No secrets/credential files in any agent's data set;
-  reviews must not expose secrets or private domains.
-- Blind gate: see Code-mode carve-out above for prose vs code rules.
-- Cost: each round = 2-4 fresh agents + web search. 1-2 rounds suffice for
-  most artifacts; reserve 3-5 blind rounds for high-stakes. Don't auto-loop.
-- **Async by default**: launch rounds with `async: true` and drain with
-  `subagent_wait`; only wait when the current turn must produce the synthesis,
-  otherwise let the run continue in the background and synthesize when woken.
-- Ignore stale "needs attention" subagent signals — parallel/async runs
-  complete despite nudges; inspect with `action: "status"` before steering.
+- Critics/researchers must **not modify the artifact or any project/source
+  files** — they only write their own findings report (passed via `output`).
+  (Say "do not modify project/source files", not "no file writes", so the
+  agent still writes its `output` artifact.)
+- Only **editor** role writes, and only when `mode: editor`; never two editors
+  on the same file in parallel.
+- Reviews must not expose raw secrets, credentials, or private domains.
+- Always pass **absolute paths**.
+- For blind **critic** rounds: pass the **sanitized copy**, forbid reading other
+  reviews. The **editor** round uses the **original** (see Editor reconcile).
+- 🔴 **Blind gate:** do NOT start a blind critic round until the sanitized copy
+  exists AND its leak-verify output is empty. No clean copy = not blind.
+- **Secret hygiene:** never pass credential/secret files (e.g. `.credentials.md`,
+  `.env`, token files) in an agent's data set. Exclude them from the file list.
+- **Cost:** each round = 2-4 fresh agents (+ web search). 1-2 rounds suffice for
+  most artifacts; reserve 3-5 blind rounds for high-stakes ones. Don't auto-loop.
+- Ignore stale "needs attention" subagent signals — parallel runs complete
+  (X/N succeeded) despite nudges.
 
 ## Output convention
 
-Findings per Naming & paths; after each round parent logs one line to
-ROUNDS.md (strategy vs mechanics) to track convergence.
+- Findings: `research/<area>/<TAG>_review_<N>.md` (TAG = BLIND/CLEAN/ROUND etc.)
+- Parent synthesizes + applies, then logs a one-line summary of what shifted
+  this round (strategy finding vs mechanical sync) to track convergence.
