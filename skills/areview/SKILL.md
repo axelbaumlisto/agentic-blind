@@ -5,6 +5,31 @@ description: "Multi-role agentic review & revise orchestrator. Takes a TASK and/
 
 # AREVIEW — agentic multi-role review & revise
 
+
+## The sanitizer is a SCRIPT, not a promise
+
+Blind mode above says "sanitized artifact". That claim needs a tool, and the tool
+ships with this skill: `sanitize.py` + `leak_words.txt` next to this file. Saying
+"sanitized" without running it is the failure this skill exists to prevent — a
+document asserting a property nothing enforces.
+
+```bash
+python3 <skill_dir>/sanitize.py plan.md /tmp/plan-clean.md \
+  [--extra-words domain.txt] [--allow allow.txt] [--report-only]
+```
+
+leak_words.txt loads by default; `--extra-words` adds domain vocabulary;
+`--allow` holds false-positive regexes (stems: «согласованность»,
+"unresolved", "left-aligned"). On LEAKS>0 no out file is written + exit 1 —
+**normal on first run**; iterate patterns/allowlist to 0, don't weaken the
+vocabulary. Provenance can also live in cited source files — pass sanitized
+sources too, or flag their stale conclusions as historical.
+
+Fresh context alone is NOT blind: the artifact itself leaks prior reviews through
+resolution vocabulary ("resolved", "VERIFIED", "aligned with step 1"), and a
+critic who reads those anchors on conclusions instead of re-deriving them.
+Hard-gate on LEAKS = 0 before handing the copy to any critic.
+
 ## Purpose
 
 Review **and optionally revise** any artifact (plan, doc, code, config) using
